@@ -17,8 +17,6 @@ import torch.nn as nn
 from torch.nn import functional as F
 from torchvision import transforms as tfm
 from torchvision.models import resnet18 as resnet18  # Use this for resnet18 model
-#from torchvision.models.quantization.resnet import resnet18  # Use this for resnet18 model
-#from resnet import resnet18
 # Useful link to list of models: https://pytorch.org/vision/stable/models.html
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer, LightningModule
@@ -31,16 +29,14 @@ import copy
 
 
 def parameters():
-    parser = argparse.ArgumentParser(description="NutriVision Trainer")
+    parser = argparse.ArgumentParser(description="SPCNET Trainer")
     # Run quick-test mode or full training
     parser.add_argument("--quick_test", help="Runs only a single batch of train, val, and test for testing code,", action="store_true")
-    # For full precision (normal) training
-    parser.add_argument("--quantize", help="Default is to train with quantization, this option will train without quantization", action="store_true") 
     args, args_other = parser.parse_known_args()
     return (args, args_other)
 
 
-# Define DataLoader for fruit-262 dataset
+# Define DataLoader
 class ProduceDataset(Dataset):
     def __init__(self, data_dir="../data/", transform=None):
         # Create an empty list for image file paths
@@ -88,7 +84,7 @@ class ProduceDataset(Dataset):
 
 
 # For pytorch lightning, everything goes inside of the network class
-class NutriVisionNet(LightningModule):
+class SPCNet(LightningModule):
     def __init__(self, num_classes=262, bs=10, lr=1e-3, workers=4, data_dir="../data/"):
         super().__init__()
         # Load resnet18 model (not pretrained)
@@ -290,88 +286,40 @@ def main():
     args, args_other = parameters()
 
     # Instantiate the network
-    nutrinet = NutriVisionNet(num_classes=number_of_classes, bs=bs, lr=learning_rate, workers=workers, data_dir=data)
+    model = SPCNet(num_classes=number_of_classes, bs=bs, lr=learning_rate, workers=workers, data_dir=data)
 
     if args.quick_test:
         # For quick testing of a single batch run below instead: 
         trainer = Trainer(fast_dev_run=True, gpus=1)
     else:
-        # Else, train with quantization
-        if args.quantize:  # This option did not produce good results, requires further testing
-            # Instantiate the trainer
-            trainer = Trainer(max_epochs=epochs, gpus=1, callbacks=QuantizationAwareTraining())
-        # Train with full precision
-        else: 
-            trainer = Trainer(max_epochs=epochs, gpus=1)
+        # Train (all batches)
+         trainer = Trainer(max_epochs=epochs, gpus=1)
 
     # Train and validate
-    trainer.fit(nutrinet)
-    # This should be the same as: trainer.fit(nutrinet, nutrinet.train_dataloader, nutrinet.val_dataloader)
+    trainer.fit(model)
+    # This should be the same as: trainer.fit(model, model.train_dataloader, model.val_dataloader)
 
     # Plot training loss and validation loss on the same plot for side-by-side comparison
     version = trainer.logger.version
     outpath = f"lightning_logs/version_{version}/train-val_loss_plot.jpg"
-    compare_loss_plots(train_loss=nutrinet.running_train_loss, val_loss=nutrinet.running_val_loss, save_file=True, outfile=outpath)
+    compare_loss_plots(train_loss=model.running_train_loss, val_loss=model.running_val_loss, save_file=True, outfile=outpath)
     
     # Run tests: Will use the best checkpoint automatically (best training)
     # Checkpoints are where model weights are stored for pytorch lighting
     #path_to_checkpoint = glob(f"lightning_logs/version_{version}/checkpoints/*.ckpt")[0]
-    #loaded_model = NutriVisionNet.load_from_checkpoint(path_to_checkpoint)
-    #loaded_model = copy.deepcopy(nutrinet)
+    #loaded_model = SPCNet.load_from_checkpoint(path_to_checkpoint)
+    #loaded_model = copy.deepcopy(model)
     trainer = Trainer()
-    trainer.test(nutrinet)
-
-    # For Quantization
-    #nutrinet.to("cpu")
-    # quant_nutrinet = copy.deepcopy(nutrinet.net)
-    # # quant_nutrinet.train()  # Need to switch to train mode to fuse layers
-
-    # # # Perform the steps to fuse model layers for resnet18 architecture
-    # # quant_nutrinet = torch.quantization.fuse_modules(quant_nutrinet, [["conv1", "bn1", "relu"]], inplace=True)
-    # # for module_name, module in quant_nutrinet.named_children():
-    # #     if "layer" in module_name:
-    # #         for basic_block_name, basic_block in module.named_children():
-    # #             torch.quantization.fuse_modules(basic_block, [["conv1", "bn1", "relu1"], ["conv2", "bn2"]], inplace=True)
-    # #             for sub_block_name, sub_block in basic_block.named_children():
-    # #                 if sub_block_name == "downsample":
-    # #                     torch.quantization.fuse_modules(sub_block, [["0", "1"]], inplace=True)
-    
-    # quant_nutrinet.eval()  # Switch to eval mode
-
-    # # Use the fused model to generate the quantized model
-    # nutrinet_q = QuantNutriVisionNet(
-    #     num_classes=number_of_classes, 
-    #     bs=bs, 
-    #     lr=learning_rate, 
-    #     workers=workers, 
-    #     data_dir=data, 
-    #     model=quant_nutrinet)
-    
-    # # Use fbgemm quantization scheme
-    # quantization_config = torch.quantization.get_default_qconfig("fbgemm")
-    # nutrinet_q.qconfig = quantization_config
-    # torch.quantization.prepare_qat(nutrinet_q, inplace=True)
-
-    # # Put model in train mode
-    # nutrinet_q.train()
+    trainer.test(model)
 
     # # Now move model to CPU
-    nutrinet.to("cpu")
-    test_data = nutrinet.test_data
+    model.to("cpu")
+    test_data = model.test_data
     # test_dataloader.to("cpu") # no attribute "to"
 
-    # # And prepare for export to raspberry pi
-    # nutrinet_q = torch.quantization.convert(nutrinet_q, inplace=True)
-    # # Put into eval mode
-    # nutrinet_q.eval()
-
-    # Save out to run tests on pi
-    #save_torchscript_model(model=quantized_model, model_dir=model_dir, model_filename=quantized_model_filename)
-    #torch.jit.save(torch.jit.script(model), model_filepath)
-
-    torch.jit.save(nutrinet.to_torchscript(), f"lightning_logs/version_{version}/nutrinet_trained.pt")
+    torch.jit.save(model.to_torchscript(), f"lightning_logs/version_{version}/model_trained.pt")
     # Save out the test_data_loader so that we can use the unseen data for testing on the pi
-    torch.save(test_data, f"lightning_logs/version_{version}/nutrinet_test_data.pt")
+    torch.save(test_data, f"lightning_logs/version_{version}/model_test_data.pt")
 
 
 if __name__ == "__main__":
