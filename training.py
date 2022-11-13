@@ -34,6 +34,7 @@ import copy
 # import torchvision.transforms as transforms
 # import torchvision.models as models
 # import torch.optim as optim
+import torch.optim.lr_scheduler as lr_scheduler
 import pretrainedmodels
 import numpy as np
 
@@ -258,7 +259,7 @@ class RSCA_Resnet(nn.Module):
 
 # For pytorch lightning, everything goes inside of the network class
 class RSCANet(LightningModule):
-    def __init__(self, bs=10, lr=0.007, workers=4, data_dir="../data/"):
+    def __init__(self, bs=10, lr=0.007, workers=4, epochs=7, data_dir="../data/"):
         super().__init__()
         # Set random seed
         pl.seed_everything(42)
@@ -271,6 +272,9 @@ class RSCANet(LightningModule):
         self.bs = bs
         # Set learning rate based on value passed
         self.lr = lr
+        # Set current epoch and total epochs
+        self.current_epoch = 0
+        self.max_epoch = epochs
         # Set number of workers based on value passed
         self.workers = workers
         # Set criterion for loss to Binary Cross Entropy Loss
@@ -337,9 +341,17 @@ class RSCANet(LightningModule):
     def configure_optimizers(self):
         # Use SGD for optimizer (use momentum 0.9, weight decay 0.0001)
         optimizer = torch.optim.SGD(self.parameters(), lr=self.lr, momentum=0.9, weight_decay=0.0001)
-        return optimizer 
+        # Add poly learning rate so that learning rate decays over epochs
+        lambda1 = lambda epoch, max_epoch: (1 - (epoch/max_epoch))**0.9
+        scheduler = lr_scheduler.MultiplicativeLR(optimizer, lr_lambda=lambda1)
+        return [optimizer], [{"scheduler": scheduler, "interval": "epoch"}] 
+    
+    def lr_scheduler_step(self, scheduler, optimizer_idx, metric):
+        # Changing learning rate based on epoch so that learning rate decays over epochs
+        scheduler.step(epoch=self.current_epoch, max_epoch=self.max_epoch)
     
     def training_step(self, batch, batch_idx):
+        self.epoch = batch_idx
         inputs, labels = batch
         outputs = self.forward(inputs)
         loss = self.criterion(outputs, labels)
@@ -450,7 +462,7 @@ def main():
     args, args_other = parameters()
 
     # Instantiate the network
-    model = RSCANet(bs=bs, lr=learning_rate, workers=workers, data_dir=data)
+    model = RSCANet(bs=bs, lr=learning_rate, workers=workers, epochs=epochs, data_dir=data)
 
     if args.quick_test:
         # For quick testing of a single batch run below instead: 
