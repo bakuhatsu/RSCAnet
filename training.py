@@ -47,29 +47,32 @@ def parameters():
     return (args, args_other)
 
 
+def load_paths(subfolder, file, path="/home/sven/data/ctw1500/", prepend="../../"):
+    file_path = f"{path}{subfolder}/{file}"
+    # Open file
+    img_paths_file = open(file_path, "r")
+
+    # Read data
+    data = img_paths_file.read()
+
+    # Convert to list with one item per line (and strip whitespace)
+    img_paths = data.split("\n")
+    # Make sure any whitespace around path is stripped
+    img_paths = [item.strip() for item in img_paths]
+    # Prepend relative path to data folder so that paths work
+    img_paths = [prepend + item for item in img_paths]
+
+    return img_paths
+
+
 # Define DataLoader
-class CTW15002015Dataset(Dataset):
-    def __init__(self, data_dir="../../data/ctw1500/", transform=None):
-        # Create an empty list for image file paths
-        self.images = []
-        # Create an empty list for labels 0 or 1
-        self.labels = []
-        # Get list of folders in data directory, these are the classes
-        self.classes = os.listdir(data_dir)
-        # Loop across folders names, which are the labels (will work for any number of classes)
-        for label, image_class in enumerate(self.classes):
-            # Define path to image folder (aka folder for a class)
-            path = os.path.join(data_dir, image_class)
-            # Get a list of all jpeg files in the folder
-            img_list = glob(f"{path}/*.jpg")
-            # For each image file
-            for img in img_list:
-                # Define image path
-                #img_path = os.path.join(path, img)  # glob step already gets path
-                # Append image path to the images list
-                self.images.append(img)
-                # Append the image class label (0:apple, 1:orange, ...) to the labels list
-                self.labels.append(label)
+class CTW1500Dataset(Dataset):
+    def __init__(self, traintest, data_dir="../../data/ctw1500/", transform=None):
+        # Create list of paths to images
+        self.images = load_paths(subfolder=traintest, file="img_paths.txt")
+        # Create list of paths to curved text bounding boxes
+        self.curvebboxes = load_paths(subfolder=traintest, file="label_curve_paths.txt")
+
         # Set the transform equal to the passed transform
         self.transform = transform
 
@@ -79,19 +82,24 @@ class CTW15002015Dataset(Dataset):
     def __getitem__(self, idx):
         # Import image (in height x width format)
         img_HW = Image.open(self.images[idx]).convert("RGB")
-        # Some images in the dataset were grayscale, so the above forces them to import as 3-channel images
+        # If any images in the dataset are grayscale, above forces them to import as 3-channel images
         
-        # Rearrange to CxHxW format and normalize values from 0-255 to 0-1
-        # and apply necessary transformation to change 0-1 into range from -1-1
+        # Rearrange to CxHxW format and apply necessary transforms
         img_CHW = self.transform(img_HW)
 
-        # Do not one-hot encode labels for CrossEntropyLoss()
+        # BinaryCrossEntropy takes...
+
+        # Also, each cbbox file may contain multiple cbboxes
+
+        ## TODO: fix this part      
         # CrossEntropyLoss(input, target) takes LongTensor targets and FloatTensor inputs 
         # label as integer value
-        label = self.labels[idx]
+        cbbox = self.curvebboxes[idx]
+
+        # Do we need to return the cbbox of a masked image (binary black/white) based on the cbboxes
 
         # Return processed image and label
-        return (img_CHW, label)
+        return (img_CHW, cbbox)
 
 
 class ResidualBlock(nn.Module):
@@ -277,8 +285,9 @@ class RSCANet(LightningModule):
         self.max_epoch = epochs
         # Set number of workers based on value passed
         self.workers = workers
-        # Set criterion for loss to Binary Cross Entropy Loss
-        self.criterion = nn.BCELoss()
+        # Set criterion for loss to Binary Cross Entropy Loss with weighted positives
+        #self.criterion = nn.BCELoss()
+        self.criterion = nn.BCEWithLogits(pos_weights=3)  # From paper: loss ration pos:neg 1:3
         # For plotting training vs validation loss
         self.running_train_loss = []
         self.running_val_loss = []
@@ -296,7 +305,10 @@ class RSCANet(LightningModule):
         ## OLD tranforms (not used) ##
         # All pre-trained models expect input images normalized in the same way, i.e. mini-batches of 3-channel RGB images of shape (3 x H x W), where H and W are expected to be at least 224. The images have to be loaded in to a range of [0, 1] and then normalized using mean = [0.485, 0.456, 0.406] and std = [0.229, 0.224, 0.225].
         ####
+        # Rearrange to CxHxW format and normalize values from 0-255 to 0-1
+        # and apply necessary transformation to change 0-1 into range from -1-1
 
+        ## TODO: check/edit transforms
         transform = tfm.Compose([
             tfm.Resize(256),
             tfm.CenterCrop(224),
@@ -304,15 +316,19 @@ class RSCANet(LightningModule):
             tfm.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
 
-        # Define ctw15002015 dataset
-        ctw1500_dataset = CTW15002015Dataset(self.data_dir, transform)
-        # Define split: 70:20:10
-        split = [int(0.7*len(ctw1500_dataset)), int(0.2*len(ctw1500_dataset)), int(0.1*len(ctw1500_dataset))]
+        # Define CTW1500 train and test datasets
+        train_dataset = CTW1500Dataset(traintest="train", self.data_dir, transform)
+        test_dataset = CTW1500Dataset(traintest="test", self.data_dir, transform)
+
+        self.test_data = test_dataset
+        
+        # Define split for training into train/val: 80:20
+        split = [int(0.80*len(train_dataset)), int(0.20*len(test_dataset))]
         # Account for rounding down causing images to get dropped
-        split[0] += len(ctw1500_dataset) - sum(split)
+        split[0] += len(training_dataset) - sum(split)  # Should not be a problem, since 1000 images
         
         # Split into training and validation datasets
-        self.train_data, self.val_data, self.test_data = random_split(ctw1500_dataset, split)
+        self.train_data, self.val_data = random_split(train_dataset, split)
 
     def train_dataloader(self):
         train_data_loader = DataLoader(
@@ -448,7 +464,7 @@ def compare_loss_plots(train_loss, val_loss, title="Training vs Validation Loss"
 
 def main():
     #### Set parameters for training and validation ####
-    bs = 64 
+    bs = 16  # Same as used in the paper 
     workers = 4
     epochs = 7 
     learning_rate = 0.007  # Initial learning rate
