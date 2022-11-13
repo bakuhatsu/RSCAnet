@@ -48,8 +48,8 @@ def parameters():
 
 
 # Define DataLoader
-class ProduceDataset(Dataset):
-    def __init__(self, data_dir="../data/", transform=None):
+class ICDAR2015Dataset(Dataset):
+    def __init__(self, data_dir="../../data/CTW1500/", transform=None):
         # Create an empty list for image file paths
         self.images = []
         # Create an empty list for labels 0 or 1
@@ -259,7 +259,7 @@ class RSCA_Resnet(nn.Module):
 
 # For pytorch lightning, everything goes inside of the network class
 class RSCANet(LightningModule):
-    def __init__(self, bs=10, lr=0.007, workers=4, epochs=7, data_dir="../data/"):
+    def __init__(self, bs=10, lr=0.007, workers=4, epochs=7, data_dir="../../data/CTW1500/"):
         super().__init__()
         # Set random seed
         pl.seed_everything(42)
@@ -304,15 +304,15 @@ class RSCANet(LightningModule):
             tfm.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
 
-        # Define produce dataset
-        prod_dataset = ProduceDataset(self.data_dir, transform)
+        # Define ICDAR2015 dataset
+        icdar_dataset = ICDAR2015Dataset(self.data_dir, transform)
         # Define split: 70:20:10
-        split = [int(0.7*len(prod_dataset)), int(0.2*len(prod_dataset)), int(0.1*len(prod_dataset))]
+        split = [int(0.7*len(icdar_dataset)), int(0.2*len(icdar_dataset)), int(0.1*len(icdar_dataset))]
         # Account for rounding down causing images to get dropped
-        split[0] += len(prod_dataset) - sum(split)
+        split[0] += len(icdar_dataset) - sum(split)
         
         # Split into training and validation datasets
-        self.train_data, self.val_data, self.test_data = random_split(prod_dataset, split)
+        self.train_data, self.val_data, self.test_data = random_split(icdar_dataset, split)
 
     def train_dataloader(self):
         train_data_loader = DataLoader(
@@ -453,7 +453,8 @@ def main():
     epochs = 7 
     learning_rate = 0.007  # Initial learning rate
     # Set path to data directory (where folders of images have been downloaded to)
-    data = "../data/"
+    #data = "../../data/CTW1500/"
+    data = "../../data/"  ## CHECK THIS: may need to specify for input data dir and output (for plots, etc)
     # Define number of classes based on number of folders in the data directory (each folder is a class)
     # number_of_classes = len(os.listdir(data))
     ####################################################
