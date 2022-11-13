@@ -1,4 +1,5 @@
 # SPCNET
-Reimplementing SCPNET based on the paper: 
+Reimplementing RSCA network based on the paper: 
 
-Xie, Enze, Yuhang Zang, Shuai Shao, Gang Yu, Cong Yao, and Guangyao Li. “Scene Text Detection with Supervised Pyramid Context Network.” Proceedings of the AAAI Conference on Artificial Intelligence 33, no. 1 (April 3, 2019): 9038–45. https://doi.org/10.1609/aaai.v33i01.33019038.
+Li, Jiachen, Yuan Lin, Rongrong Liu, Chiu Man Ho, and Humphrey Shi. “RSCA: Real-Time Segmentation-Based Context-Aware Scene Text Detection.” In 2021 IEEE/CVF Conference on Computer Vision and Pattern Recognition Workshops (CVPRW), 2349–58. Nashville, TN, USA: IEEE, 2021. https://doi.org/10.1109/CVPRW53098.2021.00267.
+
