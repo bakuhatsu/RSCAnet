@@ -258,10 +258,12 @@ class RSCA_Resnet(nn.Module):
 
 # For pytorch lightning, everything goes inside of the network class
 class RSCANet(LightningModule):
-    def __init__(self, num_classes=262, bs=10, lr=1e-3, workers=4, data_dir="../data/"):
+    def __init__(self, bs=10, lr=0.007, workers=4, data_dir="../data/"):
         super().__init__()
+        # Set random seed
+        pl.seed_everything(42)
         # Load RSCA model with Resnet18 backbone
-        rsca_model = ResnetMod(ResidualBlock, [3, 4, 6, 3])
+        rsca_model = RSCA_Resnet(ResidualBlock, [3, 4, 6, 3])
         # Use rsca_model as network for training
         self.net = rsca_model
         self.data_dir = data_dir
@@ -282,9 +284,15 @@ class RSCANet(LightningModule):
         return output
 
     def prepare_data(self):   
-        # Transform to match expected input image format for resnet
-        # Comment below from: https://pytorch.org/hub/pytorch_vision_resnet/
+        # Transform to match expected input image format 
+        # Mini-batches of 3-channel RGB images of shape (3 x H x W)
+        # 1) Images are randomly horizontally flipped and rotated in range [-10, 10] (degrees)
+        # 2) Images are randomly reshaped with ratio [0.5, 3.0] and then cropped by 640 x 640 
+        
+        ## OLD tranforms (not used) ##
         # All pre-trained models expect input images normalized in the same way, i.e. mini-batches of 3-channel RGB images of shape (3 x H x W), where H and W are expected to be at least 224. The images have to be loaded in to a range of [0, 1] and then normalized using mean = [0.485, 0.456, 0.406] and std = [0.229, 0.224, 0.225].
+        ####
+
         transform = tfm.Compose([
             tfm.Resize(256),
             tfm.CenterCrop(224),
@@ -327,7 +335,8 @@ class RSCANet(LightningModule):
         return test_data_loader
     
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        # Use SGD for optimizer (use momentum 0.9, weight decay 0.0001)
+        optimizer = torch.optim.SGD(self.parameters(), lr=self.lr, momentum=0.9, weight_decay=0.0001)
         return optimizer 
     
     def training_step(self, batch, batch_idx):
@@ -426,33 +435,22 @@ def compare_loss_plots(train_loss, val_loss, title="Training vs Validation Loss"
 
 
 def main():
-    #### For reproducibility to use same seed #########
-    seed = 0
-    # random.seed(seed) # I did not use random
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic=True
-    torch.backends.cudnn.benchmarks=False
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    ####################################################
-
     #### Set parameters for training and validation ####
-    bs = 64  # Previously 10
+    bs = 64 
     workers = 4
-    epochs = 7 #7  # Trained for 20, but getting overfitting.  Lowest validation loss occured at 7 epochs.
-    learning_rate = 1e-3
+    epochs = 7 
+    learning_rate = 0.007  # Initial learning rate
     # Set path to data directory (where folders of images have been downloaded to)
     data = "../data/"
-    #data = "../data_temp/"
     # Define number of classes based on number of folders in the data directory (each folder is a class)
-    number_of_classes = len(os.listdir(data))
+    # number_of_classes = len(os.listdir(data))
     ####################################################
 
     # Get arguments passed in command line call
     args, args_other = parameters()
 
     # Instantiate the network
-    model = SPCNet(num_classes=number_of_classes, bs=bs, lr=learning_rate, workers=workers, data_dir=data)
+    model = RSCANet(bs=bs, lr=learning_rate, workers=workers, data_dir=data)
 
     if args.quick_test:
         # For quick testing of a single batch run below instead: 
@@ -463,7 +461,7 @@ def main():
 
     # Train and validate
     trainer.fit(model)
-    # This should be the same as: trainer.fit(model, model.train_dataloader, model.val_dataloader)
+    # Same as: trainer.fit(model, model.train_dataloader, model.val_dataloader)
 
     # Plot training loss and validation loss on the same plot for side-by-side comparison
     version = trainer.logger.version
@@ -473,19 +471,19 @@ def main():
     # Run tests: Will use the best checkpoint automatically (best training)
     # Checkpoints are where model weights are stored for pytorch lighting
     #path_to_checkpoint = glob(f"lightning_logs/version_{version}/checkpoints/*.ckpt")[0]
-    #loaded_model = SPCNet.load_from_checkpoint(path_to_checkpoint)
+    #loaded_model = RSCANet.load_from_checkpoint(path_to_checkpoint)
     #loaded_model = copy.deepcopy(model)
     trainer = Trainer()
     trainer.test(model)
 
     # # Now move model to CPU
-    model.to("cpu")
-    test_data = model.test_data
-    # test_dataloader.to("cpu") # no attribute "to"
+    # model.to("cpu")
+    # test_data = model.test_data
+    # # test_dataloader.to("cpu") # no attribute "to"
 
-    torch.jit.save(model.to_torchscript(), f"lightning_logs/version_{version}/model_trained.pt")
-    # Save out the test_data_loader so that we can use the unseen data for testing on the pi
-    torch.save(test_data, f"lightning_logs/version_{version}/model_test_data.pt")
+    # torch.jit.save(model.to_torchscript(), f"lightning_logs/version_{version}/model_trained.pt")
+    # # Save out the test_data_loader so that we can use the unseen data for testing on the pi
+    # torch.save(test_data, f"lightning_logs/version_{version}/model_test_data.pt")
 
 
 if __name__ == "__main__":
