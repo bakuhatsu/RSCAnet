@@ -277,7 +277,7 @@ class RSCANet(LightningModule):
         # Set learning rate based on value passed
         self.lr = lr
         # Set current epoch and total epochs
-        self.current_epoch = 0
+        self.curr_epoch = 0
         self.max_epoch = epochs
         # Set number of workers based on value passed
         self.workers = workers
@@ -359,7 +359,7 @@ class RSCANet(LightningModule):
     
     def lr_scheduler_step(self, scheduler, optimizer_idx, metric):
         # Changing learning rate based on epoch so that learning rate decays over epochs
-        scheduler.step(epoch=self.current_epoch, max_epoch=self.max_epoch)
+        scheduler.step(epoch=self.curr_epoch, max_epoch=self.max_epoch)
     
     def training_step(self, batch, batch_idx):
         self.epoch = batch_idx
@@ -421,7 +421,7 @@ class RSCANet(LightningModule):
         average_training_loss = torch.stack([x["loss"] for x in outputs]).mean()
 
         # To get plotting per epoch, need to add loss and accuracy as scalars
-        self.logger.experiment.add_scalar("Train_Loss", average_training_loss, self.current_epoch)
+        self.logger.experiment.add_scalar("Train_Loss", average_training_loss, self.curr_epoch)
 
         # For plot comparing training and validation loss
         self.running_train_loss.append(average_training_loss)
@@ -450,9 +450,9 @@ class RSCANet(LightningModule):
         self.log("log", tensorboard_logs)
 
         # To get plotting per epoch, need to add loss and accuracy as scalars
-        self.logger.experiment.add_scalar("Val_Loss", average_validation_loss, self.current_epoch)
+        self.logger.experiment.add_scalar("Val_Loss", average_validation_loss, self.curr_epoch)
 
-        self.logger.experiment.add_scalar("Val_Accuracy", accuracy, self.current_epoch)
+        self.logger.experiment.add_scalar("Val_Accuracy", accuracy, self.curr_epoch)
 
         # For plot comparing training and validation loss
         self.running_val_loss.append(average_validation_loss)
@@ -488,7 +488,7 @@ def main():
     #### Set parameters for training and validation ####
     bs = 16  # Same as used in the paper 
     workers = 4
-    epochs = 7 
+    epochs = 10 
     learning_rate = 0.007  # Initial learning rate
     # Set path to data directory (where folders of images have been downloaded to)
     data = "../../data/totaltext/"
