@@ -212,7 +212,9 @@ class RSCA_Resnet(nn.Module):
         self.lcau1 = LCAU_Block(512, 256)  # 512/2 = 256
         self.lcau2 = LCAU_Block(256, 128)  # 256/2 = 128
         self.lcau3 = LCAU_Block(128, 64)   # 128/2 = 64
-        self.lcau4 = LCAU_Block(64, 32)    # 64/2 = 32
+        # self.lcau4 = LCAU_Block(64, 32)    # 64/2 = 32
+        self.lcau4 = LCAU_Block(64, 1)    # 64/2 = 32, last layer need 1 channel output
+        self.nn_upsample = nn.Upsample(scale_factor=2, mode="nearest")
     
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
@@ -263,7 +265,11 @@ class RSCA_Resnet(nn.Module):
         x = self.lcau4(x)
         # print("step8: ", x.shape)
         # do LCAU steps take 2 inputs or are there additions (I think multiplications?) between steps?
-        # Nope, just addition as above (I think) 
+        # Nope, just addition as above (I think)
+        
+        # Need to get from [16, 32, 320, 320] to [16, 1, 640, 640] 
+        # Cannot reshape when number of elements don't match... FIXED
+        x = self.nn_upsample(x)
 
         # Make output pixels between 0 and 1
         x = torch.sigmoid(x)
@@ -292,10 +298,10 @@ class RSCANet(LightningModule):
         # Set number of workers based on value passed
         self.workers = workers
         # Set criterion for loss to Binary Cross Entropy Loss with weighted positives
-        #self.criterion = nn.BCELoss()
-        p_weights = torch.ones([2])
-        p_weights[1] = 3
-        self.criterion = nn.BCEWithLogitsLoss(pos_weight=p_weights)  # From paper: loss ration pos:neg 1:3
+        # p_weights = torch.ones([2])
+        # p_weights[1] = 3
+        #self.criterion = nn.BCELoss(weight=p_weights)  # From paper: loss ration pos:neg 1:3
+        self.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.as_tensor(3, dtype=torch.float))  # From paper: loss ration pos:neg 1:3
         # For plotting training vs validation loss
         self.running_train_loss = []
         self.running_val_loss = []
@@ -377,6 +383,8 @@ class RSCANet(LightningModule):
         self.epoch = batch_idx
         inputs, masks = batch
         outputs = self.forward(inputs)
+        print("Outputs: ", outputs.shape)
+        print("Masks:", masks.shape)
         loss = self.criterion(outputs, masks)
         self.log("train_loss", loss)
         return loss
@@ -401,6 +409,8 @@ class RSCANet(LightningModule):
     def validation_step(self, batch, batch_idx):
         inputs, masks = batch
         outputs = self.forward(inputs)
+        print("Outputs_v: ", outputs.shape)
+        print("Masks_v:", masks.shape)
         loss = self.criterion(outputs, masks)
         accuracy = self.get_accuracy(outputs, masks)
 
@@ -418,6 +428,8 @@ class RSCANet(LightningModule):
     def test_step(self, batch, batch_idx):
         inputs, masks = batch
         outputs = self.forward(inputs)
+        print("Outputs_t: ", outputs.shape)
+        print("Masks_t:", masks.shape)
         loss = self.criterion(outputs, masks)
         accuracy = self.get_accuracy(outputs, masks)
         # pred_indices = outputs.argmax(dim=1, keepdim=True)
