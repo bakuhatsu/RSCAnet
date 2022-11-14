@@ -5,3 +5,7 @@ Li, Jiachen, Yuan Lin, Rongrong Liu, Chiu Man Ho, and Humphrey Shi. “RSCA: Rea
 
 CTW1500 dataset obtained from: 
 https://github.com/whai362/pan_pp.pytorch/tree/master/dataset
+BAD ANNOTATIONS, not used
+
+TotalText dataset obtained from:
+https://github.com/cs-chan/Total-Text-Dataset

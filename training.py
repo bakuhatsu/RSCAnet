@@ -97,6 +97,7 @@ class CTW1500Dataset(Dataset):
         cbbox = self.curvebboxes[idx]
 
         # Do we need to return the cbbox of a masked image (binary black/white) based on the cbboxes
+        # Need to get tensor of 0s and 1s corresponding to masks
 
         # Return processed image and label
         return (img_CHW, cbbox)
