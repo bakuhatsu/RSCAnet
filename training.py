@@ -82,6 +82,9 @@ class TotalTextDataset(Dataset):
         return len(self.images)
     
     def __getitem__(self, idx):
+        # print(idx)
+        # print(len(self.images))
+        # print(len(self.masks))
         # Import image (in height x width format)
         img_HW = Image.open(self.images[idx]).convert("RGB")
         # If any images in the dataset are grayscale, above forces them to import as 3-channel images
@@ -186,6 +189,7 @@ class RSCA_Resnet(nn.Module):
     def __init__(self, block, layers, num_classes = 1000):
         super(RSCA_Resnet, self).__init__()
         self.model =  pretrainedmodels.__dict__['resnet18'](pretrained='imagenet')
+        #self.model =  pretrainedmodels.__dict__['resnet18'](weights='imagenet')
         self.inplanes = 64
         self.conv1 = nn.Sequential(
                         nn.Conv2d(3, 64, kernel_size = 7, stride = 2, padding = 3),
@@ -506,10 +510,10 @@ def main():
 
     if args.quick_test:
         # For quick testing of a single batch run below instead: 
-        trainer = Trainer(fast_dev_run=True, gpus=1, default_root_dir="../RSCAnet_checkpoints/")
+        trainer = Trainer(fast_dev_run=True, accelerator="gpu", devices=1, default_root_dir="../RSCAnet_checkpoints/")
     else:
         # Train (all batches)
-         trainer = Trainer(max_epochs=epochs, gpus=1, default_root_dir="../RSCAnet_checkpoints/")
+         trainer = Trainer(max_epochs=epochs, accelerator="gpu", devices=1, default_root_dir="../RSCAnet_checkpoints/")
 
     # Train and validate
     trainer.fit(model)
