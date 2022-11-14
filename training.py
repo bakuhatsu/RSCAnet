@@ -383,8 +383,6 @@ class RSCANet(LightningModule):
         self.epoch = batch_idx
         inputs, masks = batch
         outputs = self.forward(inputs)
-        print("Outputs: ", outputs.shape)
-        print("Masks:", masks.shape)
         loss = self.criterion(outputs, masks)
         self.log("train_loss", loss)
         return loss
@@ -404,13 +402,11 @@ class RSCANet(LightningModule):
         # Compute accuracy
         pixel_accuracy = 100*(self.correct/self.pixels)
         
-        return pixel_accuracy, self.dice_score
+        return pixel_accuracy#, self.dice_score
 
     def validation_step(self, batch, batch_idx):
         inputs, masks = batch
         outputs = self.forward(inputs)
-        print("Outputs_v: ", outputs.shape)
-        print("Masks_v:", masks.shape)
         loss = self.criterion(outputs, masks)
         accuracy = self.get_accuracy(outputs, masks)
 
@@ -428,8 +424,6 @@ class RSCANet(LightningModule):
     def test_step(self, batch, batch_idx):
         inputs, masks = batch
         outputs = self.forward(inputs)
-        print("Outputs_t: ", outputs.shape)
-        print("Masks_t:", masks.shape)
         loss = self.criterion(outputs, masks)
         accuracy = self.get_accuracy(outputs, masks)
         # pred_indices = outputs.argmax(dim=1, keepdim=True)
@@ -509,6 +503,8 @@ def compare_loss_plots(train_loss, val_loss, title="Training vs Validation Loss"
 
 
 def main():
+    # Start by clearing up GPU memory from past failures
+    torch.cuda.empty_cache()
     #### Set parameters for training and validation ####
     bs = 16  # Same as used in the paper 
     workers = 4
