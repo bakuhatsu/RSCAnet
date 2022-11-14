@@ -47,33 +47,31 @@ def parameters():
     return (args, args_other)
 
 
-# Define DataLoader
-class TotalTextDataset(Dataset):
-    def __init__(self, traintest, data_dir="../../data/totaltext/", transform=None):
-        # Create empty list for paths to images
-        self.images = []
-        # Create empty list for paths to text region masks
-        self.masks = []
+def load_paths(subfolder, file, path="/home/sven/data/ctw1500/", prepend="../../"):
+    file_path = f"{path}{subfolder}/{file}"
+    # Open file
+    img_paths_file = open(file_path, "r")
 
-        ## First, get list of images
-        # Define path to original images folder 
-        path = os.path.join(data_dir, f"Images/{traintest}/")
-        # Get a list of all jpeg files in the folder
-        image_list = glob(f"{path}/*.jpg")
-        # For each image file
-        for img in image_list:
-            # Append image path to the images list
-            self.images.append(img)
-        
-        ## Next, get list of text region masks that correspon with the images
-        # Define path to original images folder 
-        path = os.path.join(data_dir, f"Text_Region_Mask/{traintest}/")
-        # Get a list of all jpeg files in the folder
-        mask_list = glob(f"{path}/*.jpg")
-        # For each image file
-        for msk in mask_list:
-            # Append image path to the images list
-            self.masks.append(msk)
+    # Read data
+    data = img_paths_file.read()
+
+    # Convert to list with one item per line (and strip whitespace)
+    img_paths = data.split("\n")
+    # Make sure any whitespace around path is stripped
+    img_paths = [item.strip() for item in img_paths]
+    # Prepend relative path to data folder so that paths work
+    img_paths = [prepend + item for item in img_paths]
+
+    return img_paths
+
+
+# Define DataLoader
+class CTW1500Dataset(Dataset):
+    def __init__(self, traintest, data_dir="../../data/ctw1500/", transform=None):
+        # Create list of paths to images
+        self.images = load_paths(subfolder=traintest, file="img_paths.txt")
+        # Create list of paths to curved text bounding boxes
+        self.curvebboxes = load_paths(subfolder=traintest, file="label_curve_paths.txt")
 
         # Set the transform equal to the passed transform
         self.transform = transform
@@ -85,14 +83,24 @@ class TotalTextDataset(Dataset):
         # Import image (in height x width format)
         img_HW = Image.open(self.images[idx]).convert("RGB")
         # If any images in the dataset are grayscale, above forces them to import as 3-channel images
-        msk_HW = Image.open(self.masks[idx])
         
         # Rearrange to CxHxW format and apply necessary transforms
         img_CHW = self.transform(img_HW)
-        msk_CHW = self.transform(msk_HW)
+
+        # BinaryCrossEntropy takes...
+
+        # Also, each cbbox file may contain multiple cbboxes
+
+        ## TODO: fix this part      
+        # CrossEntropyLoss(input, target) takes LongTensor targets and FloatTensor inputs 
+        # label as integer value
+        cbbox = self.curvebboxes[idx]
+
+        # Do we need to return the cbbox of a masked image (binary black/white) based on the cbboxes
+        # Need to get tensor of 0s and 1s corresponding to masks
 
         # Return processed image and label
-        return (img_CHW, msk_CHW)
+        return (img_CHW, cbbox)
 
 
 class ResidualBlock(nn.Module):
@@ -260,7 +268,7 @@ class RSCA_Resnet(nn.Module):
 
 # For pytorch lightning, everything goes inside of the network class
 class RSCANet(LightningModule):
-    def __init__(self, bs=10, lr=0.007, workers=4, epochs=7, data_dir="../../data/totaltext/"):
+    def __init__(self, bs=10, lr=0.007, workers=4, epochs=7, data_dir="../../data/ctw1500/"):
         super().__init__()
         # Set random seed
         pl.seed_everything(42)
@@ -309,9 +317,9 @@ class RSCANet(LightningModule):
             tfm.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
 
-        # Define TotalText train and test datasets
-        train_dataset = TotalTextDataset(traintest="Train", self.data_dir, transform)
-        test_dataset = TotalTextDataset(traintest="Test", self.data_dir, transform)
+        # Define CTW1500 train and test datasets
+        train_dataset = CTW1500Dataset(traintest="train", self.data_dir, transform)
+        test_dataset = CTW1500Dataset(traintest="test", self.data_dir, transform)
 
         self.test_data = test_dataset
         
@@ -462,7 +470,9 @@ def main():
     epochs = 7 
     learning_rate = 0.007  # Initial learning rate
     # Set path to data directory (where folders of images have been downloaded to)
-    data = "../../data/totaltext/"
+    #data = "../../data/CTW1500/"
+    data = "../../data/ctw1500/"
+    #data = "../../data/"  ## CHECK THIS: may need to specify for input data dir and output (for plots, etc)
     # Define number of classes based on number of folders in the data directory (each folder is a class)
     # number_of_classes = len(os.listdir(data))
     ####################################################
