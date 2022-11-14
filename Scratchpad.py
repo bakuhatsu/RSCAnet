@@ -104,3 +104,10 @@ plt.show()
 
 display(img_HW)
 
+## Import png images (transparency will be ignored, which I think is ok)
+from PIL import Image
+
+path_png = "../../data/totaltext/Text_Region_Mask/Train/img101.png"
+msk_png = Image.open(path_png).convert("L")
+
+display(msk_png)

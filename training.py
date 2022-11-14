@@ -58,22 +58,28 @@ class TotalTextDataset(Dataset):
         ## First, get list of images
         # Define path to original images folder 
         path = os.path.join(data_dir, f"Images/{traintest}/")
+        # Define path to ground truth masks folder 
+        mpath = os.path.join(data_dir, f"Text_Region_Mask/{traintest}/")
         # Get a list of all jpeg files in the folder
         image_list = glob(f"{path}/*.jpg")
         # For each image file
         for img in image_list:
             # Append image path to the images list
             self.images.append(img)
-        
-        ## Next, get list of text region masks that correspon with the images
-        # Define path to original images folder 
-        path = os.path.join(data_dir, f"Text_Region_Mask/{traintest}/")
-        # Get a list of all jpeg files in the folder
-        mask_list = glob(f"{path}/*.jpg")
-        # For each image file
-        for msk in mask_list:
+            # Assemble path to corresponding mask (glob is not ordered)
+            msk = os.path.join(mpath, img.split("/")[-1].split(".")[0] + ".png")
             # Append image path to the images list
             self.masks.append(msk)
+        
+        # ## Next, get list of text region masks that correspon with the images
+        # # Define path to original images folder 
+        # path = os.path.join(data_dir, f"Text_Region_Mask/{traintest}/")
+        # # Get a list of all jpeg files in the folder
+        # mask_list = glob(f"{path}/*.png")
+        # # For each image file
+        # for msk in mask_list:
+        #     # Append image path to the images list
+        #     self.masks.append(msk)
 
         # Set the transform equal to the passed transform
         self.transform = transform
@@ -82,9 +88,9 @@ class TotalTextDataset(Dataset):
         return len(self.images)
     
     def __getitem__(self, idx):
-        # print(idx)
-        # print(len(self.images))
-        # print(len(self.masks))
+        # print("Index: ", idx)
+        # print("Length of images: ", len(self.images))
+        # print("Length of masks: ", len(self.masks))
         # Import image (in height x width format)
         img_HW = Image.open(self.images[idx]).convert("RGB")
         # If any images in the dataset are grayscale, above forces them to import as 3-channel images
@@ -138,10 +144,10 @@ class LCAU_Block(nn.Module):
     original = x
     # Get dimensions for the passed tensor to use in steps below
     batch_dim, channel_dim, H, W = x.size()
-    print("lcau1: ", x.shape)
+    # print("lcau1: ", x.shape)
     out = self.conv1(x)
     out = self.nn_upsample(out)
-    print("lcau2: ", out.shape)
+    # print("lcau2: ", out.shape)
     # custom kernel for each pixel (values are pixel values for each channel l^2)
     # Apply softmax to kernel (should apply independently for each kernel for best results, I think)
     out = F.softmax(out, dim=1) # Should this get moved later? 
@@ -152,7 +158,7 @@ class LCAU_Block(nn.Module):
     #out = out.reshape(batch_num, kernel_size ** 2, H, W, self.r ** 2) ## NEED TO FIX (variables don't exist)
     out = out.reshape(batch_dim, self.l ** 2, H, W, self.r ** 2)
     out = out.permute(0, 2, 3, 1, 4)
-    print("lcau3: ", out.shape)
+    # print("lcau3: ", out.shape)
 
     # Reassembly
     original = F.pad(original, pad=(self.l//2, self.l//2, self.l//2, self.l//2), 
@@ -162,17 +168,17 @@ class LCAU_Block(nn.Module):
     original = original.unfold(3, self.l, step=1)
     original = original.reshape(batch_dim, channel_dim, H, W, -1)
     original = original.permute(0,2,3,1,4)
-    print("lcau4: ", out.shape)
+    # print("lcau4: ", out.shape)
 
     # Perform multiplication to apply wieghts kernel to each pixel of original
     out = torch.matmul(original, out)
     out = out.reshape(batch_dim, H, W, -1)
     out = out.permute(0, 3, 1, 2)
-    print("lcau5: ", out.shape)
+    # print("lcau5: ", out.shape)
     out = self.nn_upsample(out)
-    print("lcau6: ", out.shape) # lcau6:  torch.Size([1, 256, 112, 112])
+    # print("lcau6: ", out.shape) # lcau6:  torch.Size([1, 256, 112, 112])
     out = self.conv2(out)
-    print("lcau7: ", out.shape)
+    # print("lcau7: ", out.shape)
 
     ############################
     # Apply that kernel to each pixel of original in an upsampling operation
@@ -313,8 +319,8 @@ class RSCANet(LightningModule):
             tfm.RandomRotation(degrees=(-10,10)),
             #tfm.RandomAffine(translate=(0.5, 3.0)),  ## Unclear what is meant by "reshaped with ratio"
             tfm.CenterCrop(640),
-            tfm.ToTensor(),
-            tfm.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            tfm.ToTensor()#,
+            #tfm.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  ## Works only for RGB
         ])
 
         # Define TotalText train and test datasets
