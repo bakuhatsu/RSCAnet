@@ -283,7 +283,9 @@ class RSCANet(LightningModule):
         self.workers = workers
         # Set criterion for loss to Binary Cross Entropy Loss with weighted positives
         #self.criterion = nn.BCELoss()
-        self.criterion = nn.BCEWithLogits(pos_weights=3)  # From paper: loss ration pos:neg 1:3
+        p_weights = torch.ones([2])
+        p_weights[1] = 3
+        self.criterion = nn.BCEWithLogitsLoss(pos_weight=p_weights)  # From paper: loss ration pos:neg 1:3
         # For plotting training vs validation loss
         self.running_train_loss = []
         self.running_val_loss = []
