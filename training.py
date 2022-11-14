@@ -47,7 +47,7 @@ def parameters():
     return (args, args_other)
 
 
-# Define DataLoader
+# Define Dataset for dataloader
 class TotalTextDataset(Dataset):
     def __init__(self, traintest, data_dir="../../data/totaltext/", transform=None):
         # Create empty list for paths to images
@@ -85,7 +85,7 @@ class TotalTextDataset(Dataset):
         # Import image (in height x width format)
         img_HW = Image.open(self.images[idx]).convert("RGB")
         # If any images in the dataset are grayscale, above forces them to import as 3-channel images
-        msk_HW = Image.open(self.masks[idx])
+        msk_HW = Image.open(self.masks[idx]).convert("L")
         
         # Rearrange to CxHxW format and apply necessary transforms
         img_CHW = self.transform(img_HW)
@@ -235,35 +235,38 @@ class RSCA_Resnet(nn.Module):
         #return [x1,x2,x3,x4] # returns features with channels [64,64,128,256,512]
 
         ## Feature Pyramid with LCAU blocks
-        print("step1: ", x4.shape)
+        # print("step1: ", x4.shape)
         x = self.lcau1(x4)
-        print("step2: ", x.shape)
-        print("shape of x3: ", x3.shape)
+        # print("step2: ", x.shape)
+        # print("shape of x3: ", x3.shape)
         # Sum x and x3
         x += x3
-        print("step3: ", x.shape)
+        # print("step3: ", x.shape)
         x = self.lcau2(x)
-        print("step4: ", x.shape)
+        # print("step4: ", x.shape)
         x += x2
-        print("step5: ", x.shape)
+        # print("step5: ", x.shape)
         x = self.lcau3(x)
-        print("step6: ", x.shape)
+        # print("step6: ", x.shape)
         x += x1
-        print("step7: ", x.shape)
+        # print("step7: ", x.shape)
         x = self.lcau4(x)
-        print("step8: ", x.shape)
+        # print("step8: ", x.shape)
         # do LCAU steps take 2 inputs or are there additions (I think multiplications?) between steps?
         # Nope, just addition as above (I think) 
-        
+
+        # Make output pixels between 0 and 1
+        x = torch.sigmoid(x)
+
         return x
 
 
 # For pytorch lightning, everything goes inside of the network class
 class RSCANet(LightningModule):
-    def __init__(self, bs=10, lr=0.007, workers=4, epochs=7, data_dir="../../data/totaltext/"):
+    def __init__(self, bs=10, lr=0.007, workers=4, epochs=7, data_dir="../../data/totaltext/", seed=42):
         super().__init__()
         # Set random seed
-        pl.seed_everything(42)
+        pl.seed_everything(seed)
         # Load RSCA model with Resnet18 backbone
         rsca_model = RSCA_Resnet(ResidualBlock, [3, 4, 6, 3])
         # Use rsca_model as network for training
@@ -284,6 +287,10 @@ class RSCANet(LightningModule):
         # For plotting training vs validation loss
         self.running_train_loss = []
         self.running_val_loss = []
+        # Accuracy metrics
+        self.correct = 0
+        self.pixels = 0
+        # self.dice_score = 0
 
     def forward(self,x):
         output = self.net(x)
@@ -293,32 +300,27 @@ class RSCANet(LightningModule):
         # Transform to match expected input image format 
         # Mini-batches of 3-channel RGB images of shape (3 x H x W)
         # 1) Images are randomly horizontally flipped and rotated in range [-10, 10] (degrees)
-        # 2) Images are randomly reshaped with ratio [0.5, 3.0] and then cropped by 640 x 640 
-        
-        ## OLD tranforms (not used) ##
-        # All pre-trained models expect input images normalized in the same way, i.e. mini-batches of 3-channel RGB images of shape (3 x H x W), where H and W are expected to be at least 224. The images have to be loaded in to a range of [0, 1] and then normalized using mean = [0.485, 0.456, 0.406] and std = [0.229, 0.224, 0.225].
-        ####
-        # Rearrange to CxHxW format and normalize values from 0-255 to 0-1
-        # and apply necessary transformation to change 0-1 into range from -1-1
+        # 2) Images are randomly reshaped with ratio [0.5, 3.0] and then cropped by 640 x 640
 
-        ## TODO: check/edit transforms
         transform = tfm.Compose([
-            tfm.Resize(256),
-            tfm.CenterCrop(224),
+            tfm.RandomHorizontalFlip(p=0.5),
+            tfm.RandomRotation(degrees=(-10,10)),
+            #tfm.RandomAffine(translate=(0.5, 3.0)),  ## Unclear what is meant by "reshaped with ratio"
+            tfm.CenterCrop(640),
             tfm.ToTensor(),
             tfm.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
 
         # Define TotalText train and test datasets
-        train_dataset = TotalTextDataset(traintest="Train", self.data_dir, transform)
-        test_dataset = TotalTextDataset(traintest="Test", self.data_dir, transform)
+        train_dataset = TotalTextDataset(traintest="Train", data_dir=self.data_dir, transform=transform)
+        test_dataset = TotalTextDataset(traintest="Test", data_dir=self.data_dir, transform=transform)
 
         self.test_data = test_dataset
         
         # Define split for training into train/val: 80:20
         split = [int(0.80*len(train_dataset)), int(0.20*len(test_dataset))]
         # Account for rounding down causing images to get dropped
-        split[0] += len(training_dataset) - sum(split)  # Should not be a problem, since 1000 images
+        split[0] += len(train_dataset) - sum(split)  # Should not be a problem, since 1000 images
         
         # Split into training and validation datasets
         self.train_data, self.val_data = random_split(train_dataset, split)
@@ -361,33 +363,54 @@ class RSCANet(LightningModule):
     
     def training_step(self, batch, batch_idx):
         self.epoch = batch_idx
-        inputs, labels = batch
+        inputs, masks = batch
         outputs = self.forward(inputs)
-        loss = self.criterion(outputs, labels)
+        loss = self.criterion(outputs, masks)
         self.log("train_loss", loss)
         return loss
     
+    def get_accuracy(self, pred_masks, gt_masks):
+        '''Get an accuracy by comparing accurate pixels and also a dice score accuracy'''
+        pred_masks = (pred_masks > 0.5).float()
+
+        # Calculate dice score (may be more accurate for images with a lot of background)
+        # self.dice_score += (2 * (pred_masks * gt_masks).sum())/((pred_masks + gt_masks).sum() + 1e-10)
+        # Leave out dice score since it wasn't used in the paper
+
+        # Get number of correct pixels
+        self.correct += (pred_masks == gt_masks).sum()
+        # Count total pixels
+        self.pixels += torch.numel(pred_masks)
+        # Compute accuracy
+        pixel_accuracy = 100*(self.correct/self.pixels)
+        
+        return pixel_accuracy, self.dice_score
+
     def validation_step(self, batch, batch_idx):
-        inputs, labels = batch
+        inputs, masks = batch
         outputs = self.forward(inputs)
-        loss = self.criterion(outputs, labels)
-        pred_indices = outputs.argmax(dim=1, keepdim=True)
-        matches = pred_indices.eq(labels.view_as(pred_indices)).sum().item()
-        accuracy = matches / (len(labels) * 1.0)
+        loss = self.criterion(outputs, masks)
+        accuracy = self.get_accuracy(outputs, masks)
+
+        # pred_indices = outputs.argmax(dim=1, keepdim=True)
+        # matches = pred_indices.eq(masks.view_as(pred_indices)).sum().item()
+        # accuracy = matches / (len(masks) * 1.0)
         self.log("val_loss", loss)   # more recent versions of lighting use this method to log
         #self.log("val_correct", matches) # more recent versions of lighting use this method to log
         self.log("val_acc", accuracy) # more recent versions of lighting use this method to log
-        total = len(labels)
-        return {"val_loss": loss, "correct": matches, "total": total}  # Don't return logs in recent versions of lightning
+        total = len(masks)
+        # return {"val_loss": loss, "correct": matches, "total": total}  # Don't return logs in recent versions of lightning
+        return {"val_loss": loss}
         #return loss
     
     def test_step(self, batch, batch_idx):
-        inputs, labels = batch
+        inputs, masks = batch
         outputs = self.forward(inputs)
-        loss = self.criterion(outputs, labels)
-        pred_indices = outputs.argmax(dim=1, keepdim=True)
-        matches = pred_indices.eq(labels.view_as(pred_indices)).sum().item()
-        accuracy = matches / (len(labels) * 1.0)
+        loss = self.criterion(outputs, masks)
+        accuracy = self.get_accuracy(outputs, masks)
+        # pred_indices = outputs.argmax(dim=1, keepdim=True)
+        # matches = pred_indices.eq(masks.view_as(pred_indices)).sum().item()
+        # accuracy = matches / (len(masks) * 1.0)
         self.log("test_loss", loss)   # more recent versions of lighting use this method to log
         #self.log("test_correct", matches) # more recent versions of lighting use this method to log
         self.log("test_acc", accuracy) # more recent versions of lighting use this method to log
@@ -409,9 +432,15 @@ class RSCANet(LightningModule):
         #average_validation_loss = torch.stack(outputs).mean()
         
         # Calculate accuracy from correct / total predictions
-        correct = sum([x["correct"] for x in outputs])
-        total = sum([x["total"] for x in outputs])
-        accuracy = correct / total
+        # correct = sum([x["correct"] for x in outputs])
+        # total = sum([x["total"] for x in outputs])
+        # accuracy = correct / total
+
+        # Compute accuracy
+        accuracy = 100*(self.correct/self.pixels)
+        # Reset values for test dataset
+        self.correct = 0
+        self.pixels = 0
 
         # Create tensorboard dictionary for log info
         tensorboard_logs = {"loss": average_validation_loss, "accuracy": accuracy}
@@ -463,22 +492,22 @@ def main():
     learning_rate = 0.007  # Initial learning rate
     # Set path to data directory (where folders of images have been downloaded to)
     data = "../../data/totaltext/"
-    # Define number of classes based on number of folders in the data directory (each folder is a class)
-    # number_of_classes = len(os.listdir(data))
+    # Set random seed for consistency in experimentation
+    randomseed = 42
     ####################################################
 
     # Get arguments passed in command line call
     args, args_other = parameters()
 
     # Instantiate the network
-    model = RSCANet(bs=bs, lr=learning_rate, workers=workers, epochs=epochs, data_dir=data)
+    model = RSCANet(bs=bs, lr=learning_rate, workers=workers, epochs=epochs, data_dir=data, seed=randomseed)
 
     if args.quick_test:
         # For quick testing of a single batch run below instead: 
-        trainer = Trainer(fast_dev_run=True, gpus=1)
+        trainer = Trainer(fast_dev_run=True, gpus=1, default_root_dir="../RSCAnet_checkpoints/")
     else:
         # Train (all batches)
-         trainer = Trainer(max_epochs=epochs, gpus=1)
+         trainer = Trainer(max_epochs=epochs, gpus=1, default_root_dir="../RSCAnet_checkpoints/")
 
     # Train and validate
     trainer.fit(model)
@@ -491,10 +520,11 @@ def main():
     
     # Run tests: Will use the best checkpoint automatically (best training)
     # Checkpoints are where model weights are stored for pytorch lighting
-    #path_to_checkpoint = glob(f"lightning_logs/version_{version}/checkpoints/*.ckpt")[0]
-    #loaded_model = RSCANet.load_from_checkpoint(path_to_checkpoint)
-    #loaded_model = copy.deepcopy(model)
-    trainer = Trainer()
+    # path_to_checkpoint = glob(f"../RSCAnet_checkpoints/lightning_logs/version_{version}/checkpoints/*.ckpt")[0]
+    # loaded_model = RSCANet.load_from_checkpoint(path_to_checkpoint)
+    ## Uncomment 2 lines above only if needed to load from existing model 
+    ## (otherwise trained model already exists from above)
+    trainer = Trainer(default_root_dir="../RSCAnet_checkpoints/")
     trainer.test(model)
 
     # # Now move model to CPU
