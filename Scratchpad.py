@@ -111,3 +111,70 @@ path_png = "../../data/totaltext/Text_Region_Mask/Train/img101.png"
 msk_png = Image.open(path_png).convert("L")
 
 display(msk_png)
+
+
+import argparse
+import torch
+from torch.utils.data import DataLoader, Dataset, random_split
+#from torch.optim import Adam
+import torch.nn as nn
+from torch.nn import functional as F
+from torchvision import transforms as tfm
+from torchvision.models import resnet18 as resnet18  # Use this for resnet18 model
+# Useful link to list of models: https://pytorch.org/vision/stable/models.html
+import pytorch_lightning as pl
+from pytorch_lightning import Trainer, LightningModule
+from pytorch_lightning.callbacks import QuantizationAwareTraining, ModelCheckpoint #, ModelPruning, 
+import os
+from glob import glob
+from PIL import Image
+import matplotlib.pyplot as plt
+import copy
+# Possible additional imports (delete unneeded later)
+# import torchvision as tv
+# import torchvision.transforms as transforms
+# import torchvision.models as models
+# import torch.optim as optim
+import torch.optim.lr_scheduler as lr_scheduler
+import pretrainedmodels
+import numpy as np
+
+## Predictions from trained model
+import torch
+
+from training import RSCANet
+
+model = RSCANet.load_from_checkpoint("../RSCAnet_checkpoints/lightning_logs/version_17/checkpoints/epoch=49-step=11950.ckpt")
+
+model.eval()
+
+# Load image to predict mask for
+img_path = "../../data/totaltext/Images/Train/img101.jpg"
+
+transform = tfm.Compose([
+    tfm.CenterCrop(640),
+    tfm.ToTensor()
+])
+
+img_HW = Image.open(img_path).convert("RGB")
+img_CHW = transform(img_HW)
+
+display(img_HW)
+
+with torch.no_grad():
+    pred = model(img_CHW.unsqueeze(0))
+
+# pred = torch.sigmoid(pred)
+print(pred.max())
+print(pred.min())
+
+display(pred)
+
+pred2 = torch.where(pred > 0.001, 1, 0)
+display(pred2)
+pred2.shape
+
+#plt.imshow(pred2.squeeze(0).permute(1, 2, 0))
+
+plt.imshow(pred2.squeeze(0).permute(1, 2, 0), cmap="gray")
+plt.show()
