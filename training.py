@@ -46,6 +46,7 @@ def parameters():
     parser = argparse.ArgumentParser(description="RSCAnet Trainer")
     # Run quick-test mode or full training
     parser.add_argument("--quick_test", help="Runs only a single batch of train, val, and test for testing code,", action="store_true")
+    parser.add_argument("--no_lcau", help="Runs model with transpose convolutions in place of LCAU blocks,", action="store_false")
     args, args_other = parser.parse_known_args()
     return (args, args_other)
 
@@ -195,7 +196,7 @@ class LCAU_Block(nn.Module):
 
 
 class RSCA_Resnet(nn.Module):
-    def __init__(self, block, layers, num_classes = 1000):
+    def __init__(self, block, layers, num_classes = 1000, lcau = True):
         super(RSCA_Resnet, self).__init__()
         self.model =  pretrainedmodels.__dict__['resnet18'](pretrained='imagenet')
         #self.model =  pretrainedmodels.__dict__['resnet18'](weights='imagenet')
@@ -211,12 +212,19 @@ class RSCA_Resnet(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride = 2)
         self.avgpool = nn.AvgPool2d(7, stride=1)
         self.fc = nn.Linear(512, num_classes)
-        # LCAU_Block takes in_channels, out_channels
-        self.lcau1 = LCAU_Block(512, 256)  # 512/2 = 256
-        self.lcau2 = LCAU_Block(256, 128)  # 256/2 = 128
-        self.lcau3 = LCAU_Block(128, 64)   # 128/2 = 64
-        # self.lcau4 = LCAU_Block(64, 32)    # 64/2 = 32
-        self.lcau4 = LCAU_Block(64, 1)    # 64/2 = 32, last layer need 1 channel output
+        if lcau:
+            # LCAU_Block takes in_channels, out_channels
+            self.lcau1 = LCAU_Block(512, 256)  # 512/2 = 256
+            self.lcau2 = LCAU_Block(256, 128)  # 256/2 = 128
+            self.lcau3 = LCAU_Block(128, 64)   # 128/2 = 64
+            # self.lcau4 = LCAU_Block(64, 32)    # 64/2 = 32
+            self.lcau4 = LCAU_Block(64, 1)    # 64/2 = 32, last layer need 1 channel output
+        else:
+            # Replace LCAU blocks with transposed convolusions for comparison
+            self.lcau1 = nn.ConvTranspose2d(512, 256, 2, stride=2)
+            self.lcau2 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+            self.lcau3 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+            self.lcau4 = nn.ConvTranspose2d(64, 1, 2, stride=2)
         self.nn_upsample = nn.Upsample(scale_factor=2, mode="nearest")
     
     def _make_layer(self, block, planes, blocks, stride=1):
@@ -282,12 +290,12 @@ class RSCA_Resnet(nn.Module):
 
 # For pytorch lightning, everything goes inside of the network class
 class RSCANet(LightningModule):
-    def __init__(self, bs=10, lr=0.007, workers=4, epochs=7, data_dir="../../data/totaltext/", seed=42):
+    def __init__(self, bs=10, lr=0.007, workers=4, epochs=7, data_dir="../../data/totaltext/", seed=42, lcau=True):
         super().__init__()
         # Set random seed
         pl.seed_everything(seed)
         # Load RSCA model with Resnet18 backbone
-        rsca_model = RSCA_Resnet(ResidualBlock, [3, 4, 6, 3])
+        rsca_model = RSCA_Resnet(block=ResidualBlock, layers=[3, 4, 6, 3], lcau=lcau)
         # Use rsca_model as network for training
         self.net = rsca_model
         self.data_dir = data_dir
@@ -375,7 +383,8 @@ class RSCANet(LightningModule):
         optimizer = torch.optim.SGD(self.parameters(), lr=self.lr, momentum=0.9, weight_decay=0.0001)
         # Add poly learning rate so that learning rate decays over epochs
         #lambda1 = lambda epoch, max_epoch: (1 - (epoch/max_epoch))**0.9
-        lambda1 = lambda epoch: (1 - (epoch/self.max_epoch))**0.9
+        lambda1 = lambda epoch: (1 - (epoch/self.max_epoch))**0.9  ## 0.9 used in paper
+        #lambda1 = lambda epoch: (1 - (epoch/self.max_epoch))**0.5  ## testing lower power
         scheduler = lr_scheduler.MultiplicativeLR(optimizer, lr_lambda=lambda1)
         return [optimizer], [{"scheduler": scheduler, "interval": "epoch"}] 
     
@@ -519,7 +528,8 @@ def main():
     workers = 4
     epochs = 50 
     #learning_rate = 0.007  # Initial learning rate from paper
-    learning_rate = 1e-5  # Lower learning rate (good results with 10 epoch)
+    learning_rate = 1e-5  # Lower learning rate (good results with 10-50 epochs)
+    #learning_rate = 7e-5  # 
     #learning_rate = 1e-6  # Lower learning rate (good results with 20 epoch, but 1e-5 looks better)
     # Set path to data directory (where folders of images have been downloaded to)
     data = "../../data/totaltext/"
@@ -534,7 +544,7 @@ def main():
     args, args_other = parameters()
 
     # Instantiate the network
-    model = RSCANet(bs=bs, lr=learning_rate, workers=workers, epochs=epochs, data_dir=data, seed=randomseed)
+    model = RSCANet(bs=bs, lr=learning_rate, workers=workers, epochs=epochs, data_dir=data, seed=randomseed, lcau=args.no_lcau)
 
     if args.quick_test:
         # For quick testing of a single batch run below instead: 
