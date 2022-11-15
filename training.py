@@ -11,6 +11,8 @@
 # USA: IEEE, 2021. https://doi.org/10.1109/CVPRW53098.2021.00267.
 ###############################################################################################
 
+# Note to self: conda activate newtorch
+
 # Imports
 import argparse
 import torch
@@ -37,6 +39,7 @@ import copy
 import torch.optim.lr_scheduler as lr_scheduler
 import pretrainedmodels
 import numpy as np
+import warnings
 
 
 def parameters():
@@ -371,13 +374,15 @@ class RSCANet(LightningModule):
         # Use SGD for optimizer (use momentum 0.9, weight decay 0.0001)
         optimizer = torch.optim.SGD(self.parameters(), lr=self.lr, momentum=0.9, weight_decay=0.0001)
         # Add poly learning rate so that learning rate decays over epochs
-        lambda1 = lambda epoch, max_epoch: (1 - (epoch/max_epoch))**0.9
+        #lambda1 = lambda epoch, max_epoch: (1 - (epoch/max_epoch))**0.9
+        lambda1 = lambda epoch: (1 - (epoch/self.max_epoch))**0.9
         scheduler = lr_scheduler.MultiplicativeLR(optimizer, lr_lambda=lambda1)
         return [optimizer], [{"scheduler": scheduler, "interval": "epoch"}] 
     
     def lr_scheduler_step(self, scheduler, optimizer_idx, metric):
         # Changing learning rate based on epoch so that learning rate decays over epochs
-        scheduler.step(epoch=self.curr_epoch, max_epoch=self.max_epoch)
+        # scheduler.step(epoch=self.curr_epoch, max_epoch=self.max_epoch)
+        scheduler.step(epoch=self.curr_epoch)
     
     def training_step(self, batch, batch_idx):
         self.epoch = batch_idx
@@ -485,6 +490,9 @@ class RSCANet(LightningModule):
 
 def compare_loss_plots(train_loss, val_loss, title="Training vs Validation Loss", save_file=False, outfile="train-val_loss_plot.jpg"):
     """A function to plot training and validation running losses on the same plot for a side-by-side comparison"""
+    train_loss = [item.cpu().detach().numpy() for item in train_loss]
+    val_loss = [item.cpu().detach().numpy() for item in val_loss]
+
     plt.figure()
     plt.title(title)     
     plt.plot(train_loss, label="Training Loss")
@@ -506,15 +514,21 @@ def main():
     # Start by clearing up GPU memory from past failures
     torch.cuda.empty_cache()
     #### Set parameters for training and validation ####
-    bs = 16  # Same as used in the paper 
+    #bs = 16  # Same as used in the paper 
+    bs = 5  # Had to reduce due to out of memory errors with bs = 6 or greater 
     workers = 4
-    epochs = 10 
-    learning_rate = 0.007  # Initial learning rate
+    epochs = 50 
+    #learning_rate = 0.007  # Initial learning rate from paper
+    learning_rate = 1e-5  # Lower learning rate (good results with 10 epoch)
+    #learning_rate = 1e-6  # Lower learning rate (good results with 20 epoch, but 1e-5 looks better)
     # Set path to data directory (where folders of images have been downloaded to)
     data = "../../data/totaltext/"
     # Set random seed for consistency in experimentation
     randomseed = 42
     ####################################################
+
+    # Suppress warnings (a number of non-critical deprecation warnings will appear if not)
+    warnings.filterwarnings("ignore")
 
     # Get arguments passed in command line call
     args, args_other = parameters()
@@ -534,8 +548,11 @@ def main():
     # Same as: trainer.fit(model, model.train_dataloader, model.val_dataloader)
 
     # Plot training loss and validation loss on the same plot for side-by-side comparison
-    version = trainer.logger.version
-    outpath = f"lightning_logs/version_{version}/train-val_loss_plot.jpg"
+    if args.quick_test:
+        outpath = f"../RSCAnet_checkpoints/lightning_logs/quicktest_train-val_loss_plot.jpg"
+    else:
+        version = trainer.logger.version
+        outpath = f"../RSCAnet_checkpoints/lightning_logs/version_{version}/train-val_loss_plot.jpg"
     compare_loss_plots(train_loss=model.running_train_loss, val_loss=model.running_val_loss, save_file=True, outfile=outpath)
     
     # Run tests: Will use the best checkpoint automatically (best training)
