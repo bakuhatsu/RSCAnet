@@ -95,21 +95,25 @@ class TotalTextDataset(Dataset):
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride = 1, downsample = None):
         super(ResidualBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size = 3, stride = stride, padding = 1)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size = 3, stride = 1, padding = 1)
         self.downsample = downsample
-        self.bn = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU()
         self.out_channels = out_channels
+        self.conv1 = nn.Sequential(
+                        nn.Conv2d(in_channels, out_channels, kernel_size = 3, stride = stride, padding = 1),
+                        nn.BatchNorm2d(out_channels),
+                        nn.ReLU())
+        self.conv2 = nn.Sequential(
+                        nn.Conv2d(out_channels, out_channels, kernel_size = 3, stride = 1, padding = 1),
+                        nn.BatchNorm2d(out_channels))
         
     def forward(self, x):
         residual = x
         out = self.conv1(x)
-        out = self.bn(out)
-        out = self.relu(out)
+        #out = self.bn(out)
+        #out = self.relu(out)
         out = self.conv2(out)
-        out = self.bn(out)
-        out = self.relu(out)
+        #out = self.bn(out)
+        #out = self.relu(out)
         if self.downsample:
             residual = self.downsample(x)
         out += residual
@@ -167,9 +171,6 @@ class RSCA_Resnet(nn.Module):
         super(RSCA_Resnet, self).__init__()
         self.model =  pretrainedmodels.__dict__['resnet18'](pretrained='imagenet')
         self.inplanes = 64
-        self.conv1 = nn.Conv2d(3, 64, kernel_size = 7, stride = 2, padding = 3)
-        self.bn = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU()
         self.maxpool = nn.MaxPool2d(kernel_size = 3, stride = 2, padding = 1)
         # Make layers steps based on ResNet paper
         self.layer1 = self._make_layer(block, 64, layers[0], stride = 1)
@@ -178,6 +179,10 @@ class RSCA_Resnet(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride = 2)
         self.avgpool = nn.AvgPool2d(7, stride=1)
         self.fc = nn.Linear(512, num_classes)
+        self.conv1 = nn.Sequential(
+                        nn.Conv2d(3, 64, kernel_size = 7, stride = 2, padding = 3),
+                        nn.BatchNorm2d(64),
+                        nn.ReLU())
         if lcau:
             # LCAU_Block takes in_channels, out_channels
             self.lcau1 = LCAU_Block(512, 256)  # 512/2 = 256
@@ -211,8 +216,8 @@ class RSCA_Resnet(nn.Module):
     def forward(self, x: torch.Tensor): #-> List[torch.Tensor]:
         # See note [TorchScript super()]
         x = self.conv1(x)
-        x = self.bn(x)
-        x = self.relu(x)
+        # x = self.bn(x)
+        # x = self.relu(x)
         x = self.maxpool(x)
 
         x1 = self.layer1(x)
@@ -459,7 +464,7 @@ def main():
     #bs = 16  # Same as used in the paper 
     bs = 5  # Had to reduce due to out of memory errors with bs = 6 or greater 
     workers = 4
-    epochs = 50 
+    epochs = 50
     #learning_rate = 0.007  # Initial learning rate from paper
     learning_rate = 1e-5  # Lower learning rate (got better results than initial from paper)
     # Set path to data directory (where folders of images have been downloaded to)
