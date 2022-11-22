@@ -178,3 +178,48 @@ pred2.shape
 
 plt.imshow(pred2.squeeze(0).permute(1, 2, 0), cmap="gray")
 plt.show()
+
+def plot_predictions(image="img101.jpg", cutoff=0.001):
+    model = RSCANet.load_from_checkpoint("../RSCAnet_checkpoints/lightning_logs/version_17/checkpoints/epoch=49-step=11950.ckpt")
+
+    model.eval()
+
+    # Load image to predict mask for
+    img_path = f"../../data/totaltext/Images/Train/{image}"
+
+    transform = tfm.Compose([
+        tfm.CenterCrop(640),
+        tfm.ToTensor()
+    ])
+
+    img_HW = Image.open(img_path).convert("RGB")
+    img_CHW = transform(img_HW)
+
+    # display(img_HW)
+
+    with torch.no_grad():
+        pred = model(img_CHW.unsqueeze(0))
+
+    # pred = torch.sigmoid(pred)
+    print("Min: ", pred.min())
+    print("Max: ", pred.max())
+
+    # display(pred)
+
+    pred2 = torch.where(pred > cutoff, 1, 0)
+    #display(pred2)
+    pred2.shape
+
+    #plt.imshow(pred2.squeeze(0).permute(1, 2, 0))
+    display(img_HW)
+
+    plt.imshow(pred2.squeeze(0).permute(1, 2, 0), cmap="gray")
+    plt.show()
+
+
+plot_predictions()
+
+plot_predictions(image="img19.jpg", cutoff=0.0005)
+plot_predictions(image="img21.jpg", cutoff=0.0001)
+
+# Something wrong with my prediction code. 

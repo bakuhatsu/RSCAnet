@@ -11,13 +11,18 @@
 # USA: IEEE, 2021. https://doi.org/10.1109/CVPRW53098.2021.00267.
 ###############################################################################################
 
+# Note to self: conda activate newtorch
+
 # Imports
 import argparse
 import torch
 from torch.utils.data import DataLoader, Dataset, random_split
+#from torch.optim import Adam
 import torch.nn as nn
 from torch.nn import functional as F
 from torchvision import transforms as tfm
+from torchvision.models import resnet18 as resnet18  # Use this for resnet18 model
+# Useful link to list of models: https://pytorch.org/vision/stable/models.html
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer, LightningModule
 from pytorch_lightning.callbacks import QuantizationAwareTraining, ModelCheckpoint #, ModelPruning, 
@@ -26,23 +31,21 @@ from glob import glob
 from PIL import Image
 import matplotlib.pyplot as plt
 import copy
+# Possible additional imports (delete unneeded later)
+# import torchvision as tv
+# import torchvision.transforms as transforms
+# import torchvision.models as models
+# import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
-import pretrainedmodels  # For resnet18 base model
+import pretrainedmodels
 import numpy as np
 import warnings
 
 
 def parameters():
-    """Command line arguments
-    > python training.py --quick_test  # Quick test using 1 batch only to check everything is working
-    > python training.py               # Run full training and testing with LCAU blocks
-    > python training.py --no_lcau     # Run with network using transpose convolutions in place of LCAU
-    
-    """
     parser = argparse.ArgumentParser(description="RSCAnet Trainer")
     # Run quick-test mode or full training
     parser.add_argument("--quick_test", help="Runs only a single batch of train, val, and test for testing code,", action="store_true")
-    # Replace LCAU blocks with transpose convolutions
     parser.add_argument("--no_lcau", help="Runs model with transpose convolutions in place of LCAU blocks,", action="store_false")
     args, args_other = parser.parse_known_args()
     return (args, args_other)
@@ -71,6 +74,16 @@ class TotalTextDataset(Dataset):
             msk = os.path.join(mpath, img.split("/")[-1].split(".")[0] + ".png")
             # Append image path to the images list
             self.masks.append(msk)
+        
+        # ## Next, get list of text region masks that correspon with the images
+        # # Define path to original images folder 
+        # path = os.path.join(data_dir, f"Text_Region_Mask/{traintest}/")
+        # # Get a list of all jpeg files in the folder
+        # mask_list = glob(f"{path}/*.png")
+        # # For each image file
+        # for msk in mask_list:
+        #     # Append image path to the images list
+        #     self.masks.append(msk)
 
         # Set the transform equal to the passed transform
         self.transform = transform
@@ -79,6 +92,9 @@ class TotalTextDataset(Dataset):
         return len(self.images)
     
     def __getitem__(self, idx):
+        # print("Index: ", idx)
+        # print("Length of images: ", len(self.images))
+        # print("Length of masks: ", len(self.masks))
         # Import image (in height x width format)
         img_HW = Image.open(self.images[idx]).convert("RGB")
         # If any images in the dataset are grayscale, above forces them to import as 3-channel images
@@ -95,21 +111,21 @@ class TotalTextDataset(Dataset):
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride = 1, downsample = None):
         super(ResidualBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size = 3, stride = stride, padding = 1)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size = 3, stride = 1, padding = 1)
+        self.conv1 = nn.Sequential(
+                        nn.Conv2d(in_channels, out_channels, kernel_size = 3, stride = stride, padding = 1),
+                        nn.BatchNorm2d(out_channels),
+                        nn.ReLU())
+        self.conv2 = nn.Sequential(
+                        nn.Conv2d(out_channels, out_channels, kernel_size = 3, stride = 1, padding = 1),
+                        nn.BatchNorm2d(out_channels))
         self.downsample = downsample
-        self.bn = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU()
         self.out_channels = out_channels
         
     def forward(self, x):
         residual = x
         out = self.conv1(x)
-        out = self.bn(out)
-        out = self.relu(out)
         out = self.conv2(out)
-        out = self.bn(out)
-        out = self.relu(out)
         if self.downsample:
             residual = self.downsample(x)
         out += residual
@@ -120,27 +136,33 @@ class ResidualBlock(nn.Module):
 class LCAU_Block(nn.Module):
   def __init__(self, in_channels, out_channels, l=5):
     super(LCAU_Block, self).__init__()
+    ## Fill in the rest here
     self.r = 2 # Set scale factor here
     self.l = l # sqrt of 25 = 5
     self.conv1 = nn.Conv2d(in_channels, l**2, kernel_size = 3, stride = 1, padding = 1)
     self.nn_upsample = nn.Upsample(scale_factor=self.r, mode="nearest")
+    #self.batch_size = batch_size
     self.conv2 = nn.Conv2d(4*in_channels, out_channels, kernel_size = 1)
 
   def forward(self, x):
     original = x
     # Get dimensions for the passed tensor to use in steps below
     batch_dim, channel_dim, H, W = x.size()
+    # print("lcau1: ", x.shape)
     out = self.conv1(x)
     out = self.nn_upsample(out)
+    # print("lcau2: ", out.shape)
     # custom kernel for each pixel (values are pixel values for each channel l^2)
-    # Apply softmax to kernel (should apply independently for each kernel)
-    out = F.softmax(out, dim=1) # This does the equivalent (result is identical)
+    # Apply softmax to kernel (should apply independently for each kernel for best results, I think)
+    out = F.softmax(out, dim=1) # Should this get moved later? 
 
     # Need to generate weights from out (reshape, view, and/or stack)
     out = out.unfold(2, self.r, step=self.r)
     out = out.unfold(3, self.r, step=self.r)
+    #out = out.reshape(batch_num, kernel_size ** 2, H, W, self.r ** 2) ## NEED TO FIX (variables don't exist)
     out = out.reshape(batch_dim, self.l ** 2, H, W, self.r ** 2)
     out = out.permute(0, 2, 3, 1, 4)
+    # print("lcau3: ", out.shape)
 
     # Reassembly
     original = F.pad(original, pad=(self.l//2, self.l//2, self.l//2, self.l//2), 
@@ -150,14 +172,25 @@ class LCAU_Block(nn.Module):
     original = original.unfold(3, self.l, step=1)
     original = original.reshape(batch_dim, channel_dim, H, W, -1)
     original = original.permute(0,2,3,1,4)
+    # print("lcau4: ", out.shape)
 
     # Perform multiplication to apply wieghts kernel to each pixel of original
     out = torch.matmul(original, out)
     out = out.reshape(batch_dim, H, W, -1)
     out = out.permute(0, 3, 1, 2)
+    # print("lcau5: ", out.shape)
     out = self.nn_upsample(out)
+    # print("lcau6: ", out.shape) # lcau6:  torch.Size([1, 256, 112, 112])
     out = self.conv2(out)
+    # print("lcau7: ", out.shape)
 
+    ############################
+    # Apply that kernel to each pixel of original in an upsampling operation
+    # original = self.nn_upsample(original) # This is equivalent to multiplying each pixel by all values of the kernel to upsample
+    # out = F.conv2d(original, weights, stride=1, padding=2, groups=self.batch_size)
+    # out = out.view(N, 15, 24, 24) # Not sure if I need to reshape this here?  
+    ############################
+    # Can upsample by 2, use nearest neighbor
     # Return output (now upsampled by r (in this case 2x)) from original 
     return out
 
@@ -166,12 +199,13 @@ class RSCA_Resnet(nn.Module):
     def __init__(self, block, layers, num_classes = 1000, lcau = True):
         super(RSCA_Resnet, self).__init__()
         self.model =  pretrainedmodels.__dict__['resnet18'](pretrained='imagenet')
+        #self.model =  pretrainedmodels.__dict__['resnet18'](weights='imagenet')
         self.inplanes = 64
-        self.conv1 = nn.Conv2d(3, 64, kernel_size = 7, stride = 2, padding = 3)
-        self.bn = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU()
+        self.conv1 = nn.Sequential(
+                        nn.Conv2d(3, 64, kernel_size = 7, stride = 2, padding = 3),
+                        nn.BatchNorm2d(64),
+                        nn.ReLU())
         self.maxpool = nn.MaxPool2d(kernel_size = 3, stride = 2, padding = 1)
-        # Make layers steps based on ResNet paper
         self.layer1 = self._make_layer(block, 64, layers[0], stride = 1)
         self.layer2 = self._make_layer(block, 128, layers[1], stride = 2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride = 2)
@@ -183,6 +217,7 @@ class RSCA_Resnet(nn.Module):
             self.lcau1 = LCAU_Block(512, 256)  # 512/2 = 256
             self.lcau2 = LCAU_Block(256, 128)  # 256/2 = 128
             self.lcau3 = LCAU_Block(128, 64)   # 128/2 = 64
+            # self.lcau4 = LCAU_Block(64, 32)    # 64/2 = 32
             self.lcau4 = LCAU_Block(64, 1)    # 64/2 = 32, last layer need 1 channel output
         else:
             # Replace LCAU blocks with transposed convolusions for comparison
@@ -211,8 +246,8 @@ class RSCA_Resnet(nn.Module):
     def forward(self, x: torch.Tensor): #-> List[torch.Tensor]:
         # See note [TorchScript super()]
         x = self.conv1(x)
-        x = self.bn(x)
-        x = self.relu(x)
+        #x = self.bn1(x)
+        #x0 = self.relu(x)
         x = self.maxpool(x)
 
         x1 = self.layer1(x)
@@ -220,20 +255,31 @@ class RSCA_Resnet(nn.Module):
         x3 = self.layer3(x2)
         x4 = self.layer4(x3)
 
+        #return [x1,x2,x3,x4] # returns features with channels [64,64,128,256,512]
+
         ## Feature Pyramid with LCAU blocks
-        # Layer 4
+        # print("step1: ", x4.shape)
         x = self.lcau1(x4)
+        # print("step2: ", x.shape)
+        # print("shape of x3: ", x3.shape)
         # Sum x and x3
         x += x3
-        # Layer 3
+        # print("step3: ", x.shape)
         x = self.lcau2(x)
+        # print("step4: ", x.shape)
         x += x2
-        # Layer 2
+        # print("step5: ", x.shape)
         x = self.lcau3(x)
+        # print("step6: ", x.shape)
         x += x1
-        # Layer 1
+        # print("step7: ", x.shape)
         x = self.lcau4(x)
-        # Final upsampling step to match output dimensions
+        # print("step8: ", x.shape)
+        # do LCAU steps take 2 inputs or are there additions (I think multiplications?) between steps?
+        # Nope, just addition as above (I think)
+        
+        # Need to get from [16, 32, 320, 320] to [16, 1, 640, 640] 
+        # Cannot reshape when number of elements don't match... FIXED
         x = self.nn_upsample(x)
 
         # Make output pixels between 0 and 1
@@ -263,6 +309,9 @@ class RSCANet(LightningModule):
         # Set number of workers based on value passed
         self.workers = workers
         # Set criterion for loss to Binary Cross Entropy Loss with weighted positives
+        # p_weights = torch.ones([2])
+        # p_weights[1] = 3
+        #self.criterion = nn.BCELoss(weight=p_weights)  # From paper: loss ration pos:neg 1:3
         self.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.as_tensor(3, dtype=torch.float))  # From paper: loss ration pos:neg 1:3
         # For plotting training vs validation loss
         self.running_train_loss = []
@@ -270,8 +319,7 @@ class RSCANet(LightningModule):
         # Accuracy metrics
         self.correct = 0
         self.pixels = 0
-        # self.dice_score = 0  # Dice Score not fully implemented because not necessary
-        # Though it would be a better accuracy metric
+        # self.dice_score = 0
 
     def forward(self,x):
         output = self.net(x)
@@ -301,7 +349,7 @@ class RSCANet(LightningModule):
         # Define split for training into train/val: 80:20
         split = [int(0.80*len(train_dataset)), int(0.20*len(test_dataset))]
         # Account for rounding down causing images to get dropped
-        split[0] += len(train_dataset) - sum(split)  # Should not occur, but just in case
+        split[0] += len(train_dataset) - sum(split)  # Should not be a problem, since 1000 images
         
         # Split into training and validation datasets
         self.train_data, self.val_data = random_split(train_dataset, split)
@@ -334,12 +382,15 @@ class RSCANet(LightningModule):
         # Use SGD for optimizer (use momentum 0.9, weight decay 0.0001)
         optimizer = torch.optim.SGD(self.parameters(), lr=self.lr, momentum=0.9, weight_decay=0.0001)
         # Add poly learning rate so that learning rate decays over epochs
+        #lambda1 = lambda epoch, max_epoch: (1 - (epoch/max_epoch))**0.9
         lambda1 = lambda epoch: (1 - (epoch/self.max_epoch))**0.9  ## 0.9 used in paper
+        #lambda1 = lambda epoch: (1 - (epoch/self.max_epoch))**0.5  ## testing lower power
         scheduler = lr_scheduler.MultiplicativeLR(optimizer, lr_lambda=lambda1)
         return [optimizer], [{"scheduler": scheduler, "interval": "epoch"}] 
     
     def lr_scheduler_step(self, scheduler, optimizer_idx, metric):
         # Changing learning rate based on epoch so that learning rate decays over epochs
+        # scheduler.step(epoch=self.curr_epoch, max_epoch=self.max_epoch)
         scheduler.step(epoch=self.curr_epoch)
     
     def training_step(self, batch, batch_idx):
@@ -347,8 +398,7 @@ class RSCANet(LightningModule):
         inputs, masks = batch
         outputs = self.forward(inputs)
         loss = self.criterion(outputs, masks)
-        # Logs will be used for live loss curves in TensorBoard
-        self.log("train_loss", loss) # log training loss to lightning logs
+        self.log("train_loss", loss)
         return loss
     
     def get_accuracy(self, pred_masks, gt_masks):
@@ -373,33 +423,50 @@ class RSCANet(LightningModule):
         outputs = self.forward(inputs)
         loss = self.criterion(outputs, masks)
         accuracy = self.get_accuracy(outputs, masks)
-        # Logs will be used for live loss curves in TensorBoard
-        self.log("val_loss", loss)   # log validation loss to lightning logs
-        self.log("val_acc", accuracy) # log validation accuracy to lightning logs
+
+        # pred_indices = outputs.argmax(dim=1, keepdim=True)
+        # matches = pred_indices.eq(masks.view_as(pred_indices)).sum().item()
+        # accuracy = matches / (len(masks) * 1.0)
+        self.log("val_loss", loss)   # more recent versions of lighting use this method to log
+        #self.log("val_correct", matches) # more recent versions of lighting use this method to log
+        self.log("val_acc", accuracy) # more recent versions of lighting use this method to log
         total = len(masks)
+        # return {"val_loss": loss, "correct": matches, "total": total}  # Don't return logs in recent versions of lightning
         return {"val_loss": loss}
+        #return loss
     
     def test_step(self, batch, batch_idx):
         inputs, masks = batch
         outputs = self.forward(inputs)
         loss = self.criterion(outputs, masks)
         accuracy = self.get_accuracy(outputs, masks)
-        # Logs will be used for loss output in TensorBoard
-        self.log("test_loss", loss)   # log test loss to lightning logs
-        self.log("test_acc", accuracy) # log test accuracy to lightning logs
+        # pred_indices = outputs.argmax(dim=1, keepdim=True)
+        # matches = pred_indices.eq(masks.view_as(pred_indices)).sum().item()
+        # accuracy = matches / (len(masks) * 1.0)
+        self.log("test_loss", loss)   # more recent versions of lighting use this method to log
+        #self.log("test_correct", matches) # more recent versions of lighting use this method to log
+        self.log("test_acc", accuracy) # more recent versions of lighting use this method to log
         return loss
     
     
     def training_epoch_end(self, outputs):
         average_training_loss = torch.stack([x["loss"] for x in outputs]).mean()
-        # To get plotting per epoch in TensorBoard, need to add loss and accuracy as scalars
+
+        # To get plotting per epoch, need to add loss and accuracy as scalars
         self.logger.experiment.add_scalar("Train_Loss", average_training_loss, self.curr_epoch)
+
         # For plot comparing training and validation loss
         self.running_train_loss.append(average_training_loss)
     
     
     def validation_epoch_end(self, outputs):
         average_validation_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
+        #average_validation_loss = torch.stack(outputs).mean()
+        
+        # Calculate accuracy from correct / total predictions
+        # correct = sum([x["correct"] for x in outputs])
+        # total = sum([x["total"] for x in outputs])
+        # accuracy = correct / total
 
         # Compute accuracy
         accuracy = 100*(self.correct/self.pixels)
@@ -424,14 +491,14 @@ class RSCANet(LightningModule):
         
         # For tensorboard loss by epoch, need to create and epoch dictionary
         epoch_dict = {
-            # This is required
+            # This is required, apparently
             "loss": average_validation_loss
         }
         return epoch_dict
     
 
 def compare_loss_plots(train_loss, val_loss, title="Training vs Validation Loss", save_file=False, outfile="train-val_loss_plot.jpg"):
-    """Plots training and validation loss curves on the same plot for a side-by-side comparison"""
+    """A function to plot training and validation running losses on the same plot for a side-by-side comparison"""
     train_loss = [item.cpu().detach().numpy() for item in train_loss]
     val_loss = [item.cpu().detach().numpy() for item in val_loss]
 
@@ -461,7 +528,9 @@ def main():
     workers = 4
     epochs = 50 
     #learning_rate = 0.007  # Initial learning rate from paper
-    learning_rate = 1e-5  # Lower learning rate (got better results than initial from paper)
+    learning_rate = 1e-5  # Lower learning rate (good results with 10-50 epochs)
+    #learning_rate = 7e-5  # 
+    #learning_rate = 1e-6  # Lower learning rate (good results with 20 epoch, but 1e-5 looks better)
     # Set path to data directory (where folders of images have been downloaded to)
     data = "../../data/totaltext/"
     # Set random seed for consistency in experimentation
@@ -486,6 +555,7 @@ def main():
 
     # Train and validate
     trainer.fit(model)
+    # Same as: trainer.fit(model, model.train_dataloader, model.val_dataloader)
 
     # Plot training loss and validation loss on the same plot for side-by-side comparison
     if args.quick_test:
@@ -503,6 +573,15 @@ def main():
     ## (otherwise trained model already exists from above)
     trainer = Trainer(default_root_dir="../RSCAnet_checkpoints/")
     trainer.test(model)
+
+    # # Now move model to CPU
+    # model.to("cpu")
+    # test_data = model.test_data
+    # # test_dataloader.to("cpu") # no attribute "to"
+
+    # torch.jit.save(model.to_torchscript(), f"lightning_logs/version_{version}/model_trained.pt")
+    # # Save out the test_data_loader so that we can use the unseen data for testing on the pi
+    # torch.save(test_data, f"lightning_logs/version_{version}/model_test_data.pt")
 
 
 if __name__ == "__main__":
