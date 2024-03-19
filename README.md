@@ -104,7 +104,7 @@ The code assumes this directory structure and that the file is run from within t
    - Run training for $RSCA_{LCAU}$ by running `python training.py`
 
 ```python
-#### Set parameters for training and validation ####
+    #### Set parameters for training and validation ####
     #bs = 16  # Same as used in the paper 
     bs = 5  # Had to reduce due to out of memory errors with bs = 6 or greater 
     workers = 4
