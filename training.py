@@ -1,7 +1,6 @@
 ###############################################################################################
 # Sven Nelson
 # ECE 570: Artificial Intelligence
-# Student ID: nelso531
 # Date: 10/1/2022
 #
 # Reimplementing RSCA network based on the paper:
