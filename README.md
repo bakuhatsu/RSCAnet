@@ -1,8 +1,6 @@
 # Scene text detection with Local Context-Aware Upsampling
 *Sven Nelson*
 
-*nelso531*
-
 
 
 Reimplementing RSCA network (RSCAnet) based on the paper: 
