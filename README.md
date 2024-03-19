@@ -11,7 +11,7 @@ Li, Jiachen, Yuan Lin, Rongrong Liu, Chiu Man Ho, and Humphrey Shi. “RSCA: Rea
 
 No code implementation was provided by the author of the paper above. 
 
-All code in `training.py` is original code written by me (Sven Nelson). 
+All code in `training.py` is original code. 
 
 ## The implementation
 
